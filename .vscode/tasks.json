@@ -1,0 +1,58 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "build",
+            "args": [
+                "build"
+            ],
+            "command": "cargo",
+            "group": "build"
+        },
+        {
+            "label": "check",
+            "args": [
+                "check",
+            ],
+            "command": "cargo",
+            "presentation": {
+                "reveal": "always"
+            }
+        },
+        {
+            "label": "clean",
+            "args": [
+                "clean"
+            ],
+            "command": "cargo",
+            "presentation": {
+                "reveal": "always"
+            }
+        },
+        {
+            "label": "run",
+            "args": [
+                "run",
+            ],
+            "command": "cargo",
+            "presentation": {
+                "reveal": "always"
+            },
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            }
+        },
+        {
+            "label": "bench",
+            "args": [
+                "bench"
+            ],
+            "command": "cargo",
+            "presentation": {
+                "reveal": "always"
+            },
+            "group": "test"
+        }
+    ]
+}

@@ -1,0 +1,23 @@
+[package]
+name = "mesh-file-parser"
+version = "0.1.0"
+authors = ["Kimbatt <kimbatt16@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+lazy_static = "1.4.0"
+rayon = "1.4.1"
+regex = "1.3.9"
+bitflags = "1.2.1"
+
+[lib]
+name = "mfp"
+path = "src/lib.rs"
+#crate-type = ["cdylib"]
+
+[[bin]]
+name = "testapp"
+path = "src/test-app/main.rs"
+
+[profile.release]
+debug = true
