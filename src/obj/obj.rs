@@ -212,7 +212,7 @@ pub fn load_obj(file_path: &str, parse_features: ObjParseFeatures) -> Result<(),
     let load_vertex_normals = (parse_features & ObjParseFeatures::LOAD_VERTEX_NORMALS) != ObjParseFeatures::NONE;
     let load_vertex_texcoords = (parse_features & ObjParseFeatures::LOAD_VERTEX_TEXCOORDS) != ObjParseFeatures::NONE;
     let load_objects = (parse_features & ObjParseFeatures::LOAD_OBJECTS) != ObjParseFeatures::NONE;
-    let load_groups = (parse_features & ObjParseFeatures::LOAD_GROUPS) != ObjParseFeatures::NONE;
+    let load_groups = load_objects && (parse_features & ObjParseFeatures::LOAD_GROUPS) != ObjParseFeatures::NONE;
     let load_materials = (parse_features & ObjParseFeatures::LOAD_MATERIALS) != ObjParseFeatures::NONE;
 
     let load_vertex_pos_only = 
@@ -352,6 +352,18 @@ pub fn load_obj(file_path: &str, parse_features: ObjParseFeatures) -> Result<(),
                         indices.push(idx2);
                         indices.push(idx1);
                     }
+                },
+                b"o" if load_objects =>
+                {
+                    // TODO
+                },
+                b"g" if load_groups =>
+                {
+                    // TODO
+                },
+                b"mtllib" if load_materials =>
+                {
+                    // TODO
                 },
                 _ => { }
             };
