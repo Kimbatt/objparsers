@@ -1,80 +1,180 @@
 
-extern crate rayon;
 extern crate bitflags;
-
-use regex::*;
 
 use std::fs::File;
 use std::io::{self, BufRead};
 
-use super::finite_state_machine::*;
-use crate::parse_helper::*;
-
-lazy_static::lazy_static!
+fn read_vertex<'a, Iter>(params_iter: &'a mut Iter) -> Result<(f32, f32, f32), Box<dyn std::error::Error>>
+where
+    Iter: Iterator<Item = &'a [u8]>
 {
-    static ref VERTEX_REGEX: Regex = Regex::new(r"^\s*v\s+(-?\d+(\.\d+)?)\s+(-?\d+(\.\d+)?)\s+(-?\d+(\.\d+)?)").unwrap();
+    let mut vertex = [0f32; 3];
+    let mut count = 0;
 
-    static ref FACE_REGEX: Regex = Regex::new(r"((-?\d+)/(-?\d+)/(-?\d+))|((-?\d+)//(-?\d+))|((-?\d+)/(-?\d+))|(-?\d+)").unwrap();
-    static ref FACE_START_REGEX: Regex = Regex::new(r"^\s*f\s+").unwrap();
-}
-
-// try to read 3 float values from a line that was accepted by the vertex recognizer
-fn read_vertex(line: &[u8]) -> Option<(f32, f32, f32)>
-{
-    let mut index = 0;
-    let end_index = line.len();
-    while index < end_index && FiniteStateMachine::is_whitespace(line[index])
+    for segment in params_iter
     {
-        index += 1;
-    }
-
-    index += 1; // skip the letter 'v'
-
-    let mut vertex = [0.0_f32; 3];
-
-    for i in 0..3
-    {
-        match read_float(line, index)
+        vertex[count] = std::str::from_utf8(segment)?.parse::<f32>()?;
+        count += 1;
+        if count == 3
         {
-            Some((val, length)) =>
-            {
-                index += length + 1; // skip space
-                vertex[i] = val;
-            },
-            None => return None
-        };
+            break;
+        }
     }
 
-    Some((vertex[0], vertex[1], vertex[2]))
+    if count < 3
+    {
+        Err(format!("3 vertex coordinates are required, only {} found", count).into())
+    }
+    else
+    {
+        Ok((vertex[0], vertex[1], vertex[2]))
+    }
 }
 
-fn read_face(line: &[u8], temp_indices: &mut Vec<i32>) -> bool
+fn read_vertex_texcoord<'a, Iter>(params_iter: &'a mut Iter) -> Result<(f32, f32), Box<dyn std::error::Error>>
+where
+    Iter: Iterator<Item = &'a [u8]>
 {
-    let mut index = 0;
-    let end_index = line.len();
+    let mut vertex = [0f32; 2];
+    let mut count = 0;
 
-    while index < end_index && FiniteStateMachine::is_whitespace(line[index])
+    for segment in params_iter
     {
-        index += 1;
+        vertex[count] = std::str::from_utf8(segment)?.parse::<f32>()?;
+        count += 1;
+        if count == 2
+        {
+            break;
+        }
     }
 
-    index += 1; // skip the letter 'f'
-
-    loop
+    if count < 2
     {
-        match read_int(line, index)
-        {
-            ReadIndexResult::Ok(result, length) =>
-            {
-                temp_indices.push(result);
-                index += length + 1;
-            },
-            ReadIndexResult::Error => return false,
-            ReadIndexResult::Finished => return true
-        };
+        Err(format!("2 coordinates are required, only {} found", count).into())
+    }
+    else
+    {
+        Ok((vertex[0], vertex[1]))
     }
 }
 
+struct ObjVertexRelative
+{
+    position_index: i32,
+    texcoord_index: Option<i32>,
+    normal_index: Option<i32>
+}
+
+struct ObjVertexAbsolute
+{
+    position_index: u32,
+    texcoord_index: Option<u32>,
+    normal_index: Option<u32>
+}
+
+impl std::hash::Hash for ObjVertexAbsolute
+{
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H)
+    {
+        state.write_u32(self.position_index);
+        state.write_u32(if let Some(val) = self.texcoord_index { val } else { 0 });
+        state.write_u32(if let Some(val) = self.normal_index { val } else { 0 });
+        state.finish();
+    }
+}
+
+impl PartialEq for ObjVertexAbsolute
+{
+    fn eq(&self, other: &Self) -> bool
+    {
+        self.position_index == other.position_index &&
+        self.texcoord_index == other.texcoord_index &&
+        self.normal_index == other.normal_index
+    }
+}
+
+impl Eq for ObjVertexAbsolute {}
+
+const FACE_TYPE_INDEX_ONLY: u8 = 0b001;
+const FACE_TYPE_INDEX_AND_TEXCOORD: u8 = 0b011;
+const FACE_TYPE_INDEX_AND_NORMAL: u8 = 0b101;
+const FACE_TYPE_INDEX_AND_TEXCOORD_AND_NORMAL: u8 = 0b111;
+
+fn read_face<'a, Iter>(params_iter: &'a mut Iter, temp_face_data: &mut Vec<ObjVertexRelative>) -> Result<u8, Box<dyn std::error::Error>>
+where
+    Iter: Iterator<Item = &'a [u8]>
+{
+    temp_face_data.clear();
+    let mut line_face_type = None;
+
+    for segment in params_iter
+    {
+        // there can be any number of indices
+
+        // possible formats:
+        // f 1 2 3
+        // f 1/1 2/2 3/3
+        // f 1//1 2//2 3//3
+        // f 1/1/1 2/2/2 3/3/3
+
+        let mut current_indices = [None; 3];
+        let mut idx = 0;
+        let mut current_face_type = 0_u8;
+        for number_str in segment.split(|ch| *ch == b'/')
+        {
+            if idx >= 3
+            {
+                return Err("More than 3 face indices found".into());
+            }
+
+            current_indices[idx] = if number_str.is_empty()
+            {
+                None
+            }
+            else
+            {
+                current_face_type |= 1 << idx;
+                Some(std::str::from_utf8(number_str)?.parse::<i32>()?)
+            };
+
+            idx += 1;
+        }
+
+        temp_face_data.push(ObjVertexRelative
+        {
+            position_index: if let Some(pos) = current_indices[0] { pos } else { return Err("Position index is required".into()); },
+            texcoord_index: current_indices[1],
+            normal_index: current_indices[2]
+        });
+
+        if let Some(face_type) = line_face_type
+        {
+            match current_face_type
+            {
+                FACE_TYPE_INDEX_ONLY |
+                FACE_TYPE_INDEX_AND_TEXCOORD |
+                FACE_TYPE_INDEX_AND_NORMAL |
+                FACE_TYPE_INDEX_AND_TEXCOORD_AND_NORMAL =>
+                {
+                    if current_face_type != face_type
+                    {
+                        return Err("Inconsistent face type".into());
+                    }
+                },
+                _ =>
+                {
+                    return Err("Unrecognized face type".into());
+                }
+            };
+        }
+        else
+        {
+            line_face_type = Some(current_face_type);
+        }
+    }
+
+    line_face_type.ok_or("Unknown face type".into())
+}
 
 bitflags!
 {
@@ -98,172 +198,170 @@ bitflags!
     }
 }
 
+#[derive(Copy, Clone)]
+enum LineType
+{
+    Vertex,
+    Face,
+    VertexTexcoord,
+    VertexNormal,
+}
+
 pub fn load_obj(file_path: &str, parse_features: ObjParseFeatures) -> Result<(), Box<dyn std::error::Error>>
 {
-    let vertex_recognizer: FiniteStateMachine = FiniteStateMachine::new(3, {
-        let mut stc = StateTransitionCollection::new(3);
-        stc.set_transition(0, 0, FiniteStateMachine::whitespace_pattern());
-        stc.set_transition(0, 1, FiniteStateMachine::single_character_pattern(b'v'));
-        stc.set_transition(1, 2, FiniteStateMachine::whitespace_pattern());
-        stc
-    }, true, vec![2]);
-    
-    let vertex_normal_recognizer: FiniteStateMachine = FiniteStateMachine::new(4, {
-        let mut stc = StateTransitionCollection::new(4);
-        stc.set_transition(0, 0, FiniteStateMachine::whitespace_pattern());
-        stc.set_transition(0, 1, FiniteStateMachine::single_character_pattern(b'v'));
-        stc.set_transition(1, 2, FiniteStateMachine::single_character_pattern(b'n'));
-        stc.set_transition(2, 3, FiniteStateMachine::whitespace_pattern());
-        stc
-    }, true, vec![3]);
-    
-    let vertex_texcoord_recognizer: FiniteStateMachine = FiniteStateMachine::new(4, {
-        let mut stc = StateTransitionCollection::new(4);
-        stc.set_transition(0, 0, FiniteStateMachine::whitespace_pattern());
-        stc.set_transition(0, 1, FiniteStateMachine::single_character_pattern(b'v'));
-        stc.set_transition(1, 2, FiniteStateMachine::single_character_pattern(b't'));
-        stc.set_transition(2, 3, FiniteStateMachine::whitespace_pattern());
-        stc
-    }, true, vec![3]);
-    
-    let face_recognizer: FiniteStateMachine = FiniteStateMachine::new(3, {
-        let mut stc = StateTransitionCollection::new(3);
-        stc.set_transition(0, 0, FiniteStateMachine::whitespace_pattern());
-        stc.set_transition(0, 1, FiniteStateMachine::single_character_pattern(b'f'));
-        stc.set_transition(1, 2, FiniteStateMachine::whitespace_pattern());
-        stc
-    }, true, vec![2]);
+    let load_vertex_normals = (parse_features & ObjParseFeatures::LOAD_VERTEX_NORMALS) != ObjParseFeatures::NONE;
+    let load_vertex_texcoords = (parse_features & ObjParseFeatures::LOAD_VERTEX_TEXCOORDS) != ObjParseFeatures::NONE;
+    let load_objects = (parse_features & ObjParseFeatures::LOAD_OBJECTS) != ObjParseFeatures::NONE;
+    let load_groups = (parse_features & ObjParseFeatures::LOAD_GROUPS) != ObjParseFeatures::NONE;
+    let load_materials = (parse_features & ObjParseFeatures::LOAD_MATERIALS) != ObjParseFeatures::NONE;
+
+    let load_vertex_pos_only = 
+        (parse_features & ObjParseFeatures::LOAD_VERTEX_TEXCOORDS) == ObjParseFeatures::NONE &&
+        (parse_features & ObjParseFeatures::LOAD_VERTEX_NORMALS) == ObjParseFeatures::NONE;
 
     let mut vertices = Vec::<(f32, f32, f32)>::with_capacity(128);
-    let mut indices = Vec::<(u32, u32, u32)>::with_capacity(128);
-    let mut temp_face_indices = Vec::<i32>::with_capacity(16);
+    let mut texcoords = Vec::<(f32, f32)>::with_capacity(128);
+    let mut normals = Vec::<(f32, f32, f32)>::with_capacity(128);
+    let mut indices = Vec::<u32>::with_capacity(128);
+    let mut vertex_index_map = std::collections::hash_map::HashMap::<ObjVertexAbsolute, u32>::with_capacity(128);
+    let mut vertex_count = 0;
 
-    for (line_idx, line) in io::BufReader::new(File::open(file_path)?).lines().flatten().enumerate()
-    {
-        let line = line.as_bytes();
-        if vertex_recognizer.test(line)
-        {
-            if let Some(vertex) = read_vertex(line)
-            {
-                vertices.push(vertex);
-            }
-            else
-            {
-                return Err(format!("Vertex position cannot be converted to a number on line {}", line_idx + 1).into());
-            }
-        }
-        else if face_recognizer.test(line)
-        {
-            temp_face_indices.clear();
-            if !read_face(line, &mut temp_face_indices)
-            {
-                return Err(format!("Vertex indices cannot be converted to a number on line {}", line_idx + 1).into());
-            }
-            if temp_face_indices.len() < 3
-            {
-                return Err(format!("Face contains less than 3 vertex indices on line {}", line_idx + 1).into());
-            }
-
-            // triangulation for polygon faces, also works for single triangles (assuming the points are coplanar)
-            let vertex_start_index = vertices.len() as u32;
-            
-            // if the index is negative, then it refers to relative vertices (-1 refers to the currently last vertex in the list, -2 to the second last, etc.)
-            let map_index = |index: i32| -> u32
-            {
-                (if index < 0 { vertex_start_index as i32 + index } else { index - 1 }) as u32
-            };
-
-            let index0 = map_index(temp_face_indices[0]);
-
-            for i in 2..temp_face_indices.len()
-            {
-                let index1 = map_index(temp_face_indices[i - 1]);
-                let index2 = map_index(temp_face_indices[i]);
-                indices.push((index0, index2, index1));
-            }
-        }
-    }
-
-    Ok(())
-}
-
-pub fn load_obj_with_regex(file_path: &str) -> Result<(), Box<dyn std::error::Error>>
-{
-    // 2 6 9 11 capture groups are the vertex indices that we care about
-    const FACE_GROUP_INDICES: [usize; 4] = [2, 6, 9, 11];
-
-    let mut vertices = Vec::<(f32, f32, f32)>::with_capacity(128);
-    let mut faces = Vec::<(u32, u32, u32)>::with_capacity(128);
+    let mut temp_face_data = Vec::<ObjVertexRelative>::with_capacity(16);
     let mut temp_face_indices = Vec::<u32>::with_capacity(16);
 
-    for line in io::BufReader::new(File::open(file_path)?).lines()
+    let mut lines = Vec::<LineType>::with_capacity(10);
+    lines.push(LineType::Vertex);
+    lines.push(LineType::Face);
+
+    if load_vertex_texcoords
     {
-        let line = line?;
-        if let Some(m) = VERTEX_REGEX.captures(&line)
+        lines.push(LineType::VertexTexcoord);
+    }
+
+    if load_vertex_normals
+    {
+        lines.push(LineType::VertexNormal);
+    }
+
+    let mut file_face_type = None;
+
+    for line in io::BufReader::new(File::open(file_path)?).lines().flatten()
+    {
+        let line = line.as_bytes();
+        let mut split_iter = line.split(|ch| ch.is_ascii_whitespace());
+        if let Some(cmd) = split_iter.next()
         {
-            let x = m[1].parse::<f32>()?;
-            let y = m[3].parse::<f32>()?;
-            let z = m[5].parse::<f32>()?;
-            
-            vertices.push((x, y, z));
-        }
-        else if FACE_START_REGEX.is_match(&line)
-        {
-            temp_face_indices.clear();
-            for capture in FACE_REGEX.captures_iter(&line)
+            match cmd
             {
-                let mut index_value = None;
-                for face_group_idx in FACE_GROUP_INDICES.iter()
+                b"v" =>
                 {
-                    if let Some(c) = capture.get(*face_group_idx)
+                    vertices.push(read_vertex(&mut split_iter)?);
+                },
+                b"vt" if load_vertex_texcoords =>
+                {
+                    texcoords.push(read_vertex_texcoord(&mut split_iter)?);
+                },
+                b"vn" if load_vertex_normals =>
+                {
+                    normals.push(read_vertex(&mut split_iter)?);
+                },
+                b"f" =>
+                {
+                    // check face type
+                    let current_face_type = read_face(&mut split_iter, &mut temp_face_data)?;
+                    match file_face_type
                     {
-                        index_value = Some(str::parse::<i32>(c.as_str())?);
-                        break;
-                    }
-                }
+                        Some(face_type) =>
+                        {
+                            if face_type != current_face_type
+                            {
+                                return Err("Inconsistent face types found across multiple lines".into());
+                            }
+                        },
+                        None =>
+                        {
+                            // first face
+                            file_face_type = Some(current_face_type);
+                        }
+                    };
 
-                let index = match index_value
-                {
-                    Some(idx) => idx,
-                    None => return Err("Face index expected".into()) 
-                };
-
-                let absolute_index = if index == 0
-                {
-                    return Err("Face index shouldn't be zero".into());
-                }
-                else if index < 0
-                {
-                    // relative indices, -1 points to the last vertex
-                    let idx = vertices.len() as i32 + index;
-                    if idx < 0
+                    // if the index is negative, then it refers to relative vertices (-1 refers to the currently last vertex in the list, -2 to the second last, etc.)
+                    let map_position_index = |index: i32| -> u32
                     {
-                        return Err("Relative index is out of range".into());
+                        (if index < 0 { vertices.len() as i32 + index } else { index - 1 }) as u32
+                    };
+
+                    let map_texcoord_index = |index: i32| -> u32
+                    {
+                        (if index < 0 { texcoords.len() as i32 + index } else { index - 1 }) as u32
+                    };
+
+                    let map_normal_index = |index: i32| -> u32
+                    {
+                        (if index < 0 { normals.len() as i32 + index } else { index - 1 }) as u32
+                    };
+
+                    temp_face_indices.clear();
+                    for vertex in temp_face_data.iter()
+                    {
+                        let vertex_absolute = ObjVertexAbsolute
+                        {
+                            position_index: map_position_index(vertex.position_index),
+                            texcoord_index: if let Some(idx) = vertex.texcoord_index { Some(map_texcoord_index(idx)) } else { None },
+                            normal_index: if let Some(idx) = vertex.normal_index { Some(map_normal_index(idx)) } else { None },
+                        };
+
+                        let vertex_index = if load_vertex_pos_only
+                        {
+                            vertex_absolute.position_index
+                        }
+                        else
+                        {
+                            match vertex_index_map.entry(vertex_absolute)
+                            {
+                                std::collections::hash_map::Entry::Occupied(entry) =>
+                                {
+                                    *entry.get()
+                                },
+                                std::collections::hash_map::Entry::Vacant(entry) =>
+                                {
+                                    let idx = vertex_count;
+                                    vertex_count += 1;
+                                    entry.insert(idx);
+                                    idx
+                                }
+                            }
+                        };
+
+                        temp_face_indices.push(vertex_index);
                     }
 
-                    idx as u32
-                }
-                else
-                {
-                    // indices start at 1
-                    (index - 1) as u32
-                };
+                    if temp_face_indices.len() < 3
+                    {
+                        return Err("At least 3 vertex indices are required".into());
+                    }
 
-                temp_face_indices.push(absolute_index);
-            }
+                    let idx0 = temp_face_indices[0];
+                    for i in 2..temp_face_indices.len()
+                    {
+                        let idx1 = temp_face_indices[i - 1];
+                        let idx2 = temp_face_indices[i];
 
-            // faces are not always triangles
-            let i0 = temp_face_indices[0];
-            for i in 2..temp_face_indices.len()
-            {
-                let i1 = temp_face_indices[i - 1];
-                let i2 = temp_face_indices[i];
-
-                faces.push((i0, i1, i2));
-            }
+                        // vertices are in counter-clockwise order
+                        indices.push(idx0);
+                        indices.push(idx2);
+                        indices.push(idx1);
+                    }
+                },
+                _ => { }
+            };
         }
     }
 
+    println!("vertices: {}", vertices.len());
+    println!("texcoords: {}", texcoords.len());
+    println!("normals: {}", normals.len());
+    println!("indices: {}", indices.len());
+
     Ok(())
 }
-
