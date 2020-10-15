@@ -65,6 +65,7 @@ struct ObjVertexRelative
     normal_index: Option<i32>
 }
 
+#[derive(Copy, Clone)]
 struct ObjVertexAbsolute
 {
     position_index: u32,
@@ -198,7 +199,6 @@ bitflags!
     }
 }
 
-#[derive(Copy, Clone)]
 enum LineType
 {
     Vertex,
@@ -207,7 +207,15 @@ enum LineType
     VertexNormal,
 }
 
-pub fn load_obj(file_path: &str, parse_features: ObjParseFeatures) -> Result<(), Box<dyn std::error::Error>>
+pub struct ObjParseResult
+{
+    pub positions: Vec<(f32, f32, f32)>,
+    pub texcoords: Option<Vec<(f32, f32)>>,
+    pub normals: Option<Vec<(f32, f32, f32)>>,
+    pub indices: Vec<u32>
+}
+
+pub fn load_obj(file_path: &str, parse_features: ObjParseFeatures) -> Result<ObjParseResult, Box<dyn std::error::Error>>
 {
     let load_vertex_normals = (parse_features & ObjParseFeatures::LOAD_VERTEX_NORMALS) != ObjParseFeatures::NONE;
     let load_vertex_texcoords = (parse_features & ObjParseFeatures::LOAD_VERTEX_TEXCOORDS) != ObjParseFeatures::NONE;
@@ -215,19 +223,22 @@ pub fn load_obj(file_path: &str, parse_features: ObjParseFeatures) -> Result<(),
     let load_groups = load_objects && (parse_features & ObjParseFeatures::LOAD_GROUPS) != ObjParseFeatures::NONE;
     let load_materials = (parse_features & ObjParseFeatures::LOAD_MATERIALS) != ObjParseFeatures::NONE;
 
-    let load_vertex_pos_only = 
-        (parse_features & ObjParseFeatures::LOAD_VERTEX_TEXCOORDS) == ObjParseFeatures::NONE &&
-        (parse_features & ObjParseFeatures::LOAD_VERTEX_NORMALS) == ObjParseFeatures::NONE;
+    let load_vertex_pos_only = parse_features == ObjParseFeatures::NONE;
 
     let mut vertices = Vec::<(f32, f32, f32)>::with_capacity(128);
     let mut texcoords = Vec::<(f32, f32)>::with_capacity(128);
     let mut normals = Vec::<(f32, f32, f32)>::with_capacity(128);
-    let mut indices = Vec::<u32>::with_capacity(128);
+
+    let mut result_positions = Vec::<(f32, f32, f32)>::with_capacity(128);
+    let mut result_texcoords = Vec::<(f32, f32)>::with_capacity(128);
+    let mut result_normals = Vec::<(f32, f32, f32)>::with_capacity(128);
+    let mut result_indices = Vec::<u32>::with_capacity(128);
+
     let mut vertex_index_map = std::collections::hash_map::HashMap::<ObjVertexAbsolute, u32>::with_capacity(128);
     let mut vertex_count = 0;
 
-    let mut temp_face_data = Vec::<ObjVertexRelative>::with_capacity(16);
-    let mut temp_face_indices = Vec::<u32>::with_capacity(16);
+    let mut temp_face_vertices = Vec::<ObjVertexRelative>::with_capacity(16);
+    let mut temp_face_data = Vec::<u32>::with_capacity(16);
 
     let mut lines = Vec::<LineType>::with_capacity(10);
     lines.push(LineType::Vertex);
@@ -268,7 +279,7 @@ pub fn load_obj(file_path: &str, parse_features: ObjParseFeatures) -> Result<(),
                 b"f" =>
                 {
                     // check face type
-                    let current_face_type = read_face(&mut split_iter, &mut temp_face_data)?;
+                    let current_face_type = read_face(&mut split_iter, &mut temp_face_vertices)?;
                     match file_face_type
                     {
                         Some(face_type) =>
@@ -301,8 +312,8 @@ pub fn load_obj(file_path: &str, parse_features: ObjParseFeatures) -> Result<(),
                         (if index < 0 { normals.len() as i32 + index } else { index - 1 }) as u32
                     };
 
-                    temp_face_indices.clear();
-                    for vertex in temp_face_data.iter()
+                    temp_face_data.clear();
+                    for vertex in temp_face_vertices.iter()
                     {
                         let vertex_absolute = ObjVertexAbsolute
                         {
@@ -326,6 +337,25 @@ pub fn load_obj(file_path: &str, parse_features: ObjParseFeatures) -> Result<(),
                                 std::collections::hash_map::Entry::Vacant(entry) =>
                                 {
                                     let idx = vertex_count;
+
+                                    result_positions.push(*vertices.get((&vertex_absolute).position_index as usize).ok_or("Vertex position index is out of bounds")?);
+
+                                    if load_vertex_texcoords
+                                    {
+                                        if let Some(texcoord_index) = (&vertex_absolute).texcoord_index
+                                        {
+                                            result_texcoords.push(*texcoords.get(texcoord_index as usize).ok_or("Vertex texcoord index is out of bounds")?);
+                                        }
+                                    }
+
+                                    if load_vertex_normals
+                                    {
+                                        if let Some(normal_index) = (&vertex_absolute).normal_index
+                                        {
+                                            result_normals.push(*normals.get(normal_index as usize).ok_or("Vertex normal index is out of bounds")?);
+                                        }
+                                    }
+
                                     vertex_count += 1;
                                     entry.insert(idx);
                                     idx
@@ -333,24 +363,24 @@ pub fn load_obj(file_path: &str, parse_features: ObjParseFeatures) -> Result<(),
                             }
                         };
 
-                        temp_face_indices.push(vertex_index);
+                        temp_face_data.push(vertex_index);
                     }
 
-                    if temp_face_indices.len() < 3
+                    if temp_face_data.len() < 3
                     {
                         return Err("At least 3 vertex indices are required".into());
                     }
 
-                    let idx0 = temp_face_indices[0];
-                    for i in 2..temp_face_indices.len()
+                    let idx0 = temp_face_data[0];
+                    for i in 2..temp_face_data.len()
                     {
-                        let idx1 = temp_face_indices[i - 1];
-                        let idx2 = temp_face_indices[i];
+                        let idx1 = temp_face_data[i - 1];
+                        let idx2 = temp_face_data[i];
 
                         // vertices are in counter-clockwise order
-                        indices.push(idx0);
-                        indices.push(idx2);
-                        indices.push(idx1);
+                        result_indices.push(idx0);
+                        result_indices.push(idx2);
+                        result_indices.push(idx1);
                     }
                 },
                 b"o" if load_objects =>
@@ -370,10 +400,16 @@ pub fn load_obj(file_path: &str, parse_features: ObjParseFeatures) -> Result<(),
         }
     }
 
-    println!("vertices: {}", vertices.len());
-    println!("texcoords: {}", texcoords.len());
-    println!("normals: {}", normals.len());
-    println!("indices: {}", indices.len());
+    if load_vertex_pos_only
+    {
+        result_positions = vertices;
+    }
 
-    Ok(())
+    Ok(ObjParseResult
+    {
+        positions: result_positions,
+        texcoords: if load_vertex_texcoords && !result_texcoords.is_empty() { Some(result_texcoords) } else { None },
+        normals: if load_vertex_normals && !result_normals.is_empty() { Some(result_normals) } else { None },
+        indices: result_indices
+    })
 }
