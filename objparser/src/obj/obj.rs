@@ -1,8 +1,43 @@
 
 extern crate bitflags;
+extern crate lexical;
 
 use std::fs::File;
 use std::io::{self, BufRead};
+
+fn format_parse_error<T>(bytes: &[u8]) -> String
+{
+    format!("Parse error: {}",
+    {
+        let type_str = std::any::type_name::<T>();
+        if let Ok(s) = std::str::from_utf8(bytes.into())
+        {
+            format!("cannot parse {} as {}", s, type_str)
+        }
+        else
+        {
+            type_str.into()
+        }
+    })
+}
+
+fn try_parse_lossy<T: lexical::FromLexicalLossy>(bytes: &[u8]) -> Result<T, Box<dyn std::error::Error>>
+{
+    match lexical::parse_lossy::<T, _>(bytes)
+    {
+        Ok(val) => Ok(val),
+        Err(_) => Err(format_parse_error::<T>(bytes).into())
+    }
+}
+
+fn try_parse<T: lexical::FromLexical>(bytes: &[u8]) -> Result<T, Box<dyn std::error::Error>>
+{
+    match lexical::parse::<T, _>(bytes)
+    {
+        Ok(val) => Ok(val),
+        Err(_) => Err(format_parse_error::<T>(bytes).into())
+    }
+}
 
 fn read_vertex<'a, Iter>(params_iter: &'a mut Iter) -> Result<(f32, f32, f32), Box<dyn std::error::Error>>
 where
@@ -13,7 +48,7 @@ where
 
     for segment in params_iter
     {
-        vertex[count] = std::str::from_utf8(segment)?.parse::<f32>()?;
+        vertex[count] = try_parse_lossy::<f32>(segment)?;
         count += 1;
         if count == 3
         {
@@ -40,7 +75,7 @@ where
 
     for segment in params_iter
     {
-        vertex[count] = std::str::from_utf8(segment)?.parse::<f32>()?;
+        vertex[count] = try_parse_lossy::<f32>(segment)?;
         count += 1;
         if count == 2
         {
@@ -110,6 +145,7 @@ where
 
     for segment in params_iter
     {
+        assert!(!segment.is_empty());
         // there can be any number of indices
 
         // possible formats:
@@ -135,7 +171,7 @@ where
             else
             {
                 current_face_type |= 1 << idx;
-                Some(std::str::from_utf8(number_str)?.parse::<i32>()?)
+                Some(try_parse::<i32>(number_str)?)
             };
 
             idx += 1;
@@ -259,7 +295,7 @@ pub fn load_obj(file_path: &str, parse_features: ObjParseFeatures) -> Result<Obj
     for line in io::BufReader::new(File::open(file_path)?).lines().flatten()
     {
         let line = line.as_bytes();
-        let mut split_iter = line.split(|ch| ch.is_ascii_whitespace());
+        let mut split_iter = line.split(|ch| ch.is_ascii_whitespace()).filter(|segment| !segment.is_empty());
         if let Some(cmd) = split_iter.next()
         {
             match cmd
@@ -286,7 +322,7 @@ pub fn load_obj(file_path: &str, parse_features: ObjParseFeatures) -> Result<Obj
                         {
                             if face_type != current_face_type
                             {
-                                return Err("Inconsistent face types found across multiple lines".into());
+                                // return Err("Inconsistent face types found across multiple lines".into());
                             }
                         },
                         None =>
