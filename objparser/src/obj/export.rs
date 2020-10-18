@@ -32,7 +32,6 @@ impl ObjParseResult
             }
         }
 
-
         for i in (0..self.indices.len()).step_by(3)
         {
             let idx0 = self.indices[i] + 1;

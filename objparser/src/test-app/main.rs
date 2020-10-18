@@ -1,7 +1,12 @@
 
 fn main() -> Result<(), Box<dyn std::error::Error>>
 {
-    for file in  std::fs::read_dir("res/testmodels/common-3d-test-models/")?
+    for file in  std::fs::read_dir(
+        // "res/testmodels/common-3d-test-models/"
+        // "res/testmodels/assimp-test-models/"
+        // "res/testexport/"
+        "res/"
+    )?
     {
         let file_path = file?.path();
         if let Some(ext) = file_path.extension()
@@ -24,7 +29,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>>
     
         println!("loading model: {}", file_path_str);
         let result = match objparser::obj::obj::load_obj(file_path_str,
-            objparser::obj::obj::ObjParseFeatures::NONE)
+            objparser::obj::obj::ObjParseFeatures::LOAD_VERTEX_NORMALS)
         {
             Ok(res) => res,
             Err(err) =>
