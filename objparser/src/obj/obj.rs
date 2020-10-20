@@ -234,9 +234,9 @@ bitflags!
 
 pub struct ObjParseResult
 {
-    pub positions: Vec<(f32, f32, f32)>,
-    pub texcoords: Option<Vec<(f32, f32)>>,
-    pub normals: Option<Vec<(f32, f32, f32)>>,
+    pub positions: Vec<f32>,
+    pub texcoords: Option<Vec<f32>>,
+    pub normals: Option<Vec<f32>>,
     pub indices: Vec<u32>
 }
 
@@ -254,13 +254,13 @@ pub fn load_obj(file_path: &str, parse_features: ObjParseFeatures) -> Result<Obj
         (parse_features & ObjParseFeatures::LOAD_GROUPS) != ObjParseFeatures::NONE ||
         (parse_features & ObjParseFeatures::LOAD_MATERIALS) != ObjParseFeatures::NONE;
 
-    let mut vertices = Vec::<(f32, f32, f32)>::with_capacity(128);
-    let mut texcoords = Vec::<(f32, f32)>::with_capacity(128);
-    let mut normals = Vec::<(f32, f32, f32)>::with_capacity(128);
+    let mut vertices = Vec::<f32>::with_capacity(128);
+    let mut texcoords = Vec::<f32>::with_capacity(128);
+    let mut normals = Vec::<f32>::with_capacity(128);
 
-    let mut result_positions = Vec::<(f32, f32, f32)>::with_capacity(128);
-    let mut result_texcoords = Vec::<(f32, f32)>::with_capacity(128);
-    let mut result_normals = Vec::<(f32, f32, f32)>::with_capacity(128);
+    let mut result_positions = Vec::<f32>::with_capacity(128);
+    let mut result_texcoords = Vec::<f32>::with_capacity(128);
+    let mut result_normals = Vec::<f32>::with_capacity(128);
     let mut result_indices = Vec::<u32>::with_capacity(128);
 
     let mut vertex_index_map = std::collections::hash_map::HashMap::<ObjVertexAbsolute, u32>::with_capacity(128);
@@ -275,7 +275,6 @@ pub fn load_obj(file_path: &str, parse_features: ObjParseFeatures) -> Result<Obj
 
     for line in file_bytes.split(|ch| *ch == b'\n' || *ch == b'\r')
     {
-        // let line = line.as_bytes();
         let mut split_iter = line.split(|ch| ch.is_ascii_whitespace()).filter(|segment| !segment.is_empty());
         if let Some(cmd) = split_iter.next()
         {
@@ -283,15 +282,23 @@ pub fn load_obj(file_path: &str, parse_features: ObjParseFeatures) -> Result<Obj
             {
                 b"v" =>
                 {
-                    vertices.push(read_vertex(&mut split_iter)?);
+                    let vertex = read_vertex(&mut split_iter)?;
+                    vertices.push(vertex.0);
+                    vertices.push(vertex.1);
+                    vertices.push(vertex.2);
                 },
                 b"vt" if load_vertex_texcoords =>
                 {
-                    texcoords.push(read_vertex_texcoord(&mut split_iter)?);
+                    let texcoord = read_vertex_texcoord(&mut split_iter)?;
+                    texcoords.push(texcoord.0);
+                    texcoords.push(texcoord.1);
                 },
                 b"vn" if load_vertex_normals =>
                 {
-                    normals.push(read_vertex(&mut split_iter)?);
+                    let normal = read_vertex(&mut split_iter)?;
+                    normals.push(normal.0);
+                    normals.push(normal.1);
+                    normals.push(normal.2);
                 },
                 b"f" =>
                 {
@@ -443,10 +450,9 @@ pub fn load_obj(file_path: &str, parse_features: ObjParseFeatures) -> Result<Obj
                             let idx1 = temp_face_data[i - 1];
                             let idx2 = temp_face_data[i];
 
-                            // vertices are in counter-clockwise order
                             result_indices.push(idx0);
-                            result_indices.push(idx2);
                             result_indices.push(idx1);
+                            result_indices.push(idx2);
                         }
                     }
                 },

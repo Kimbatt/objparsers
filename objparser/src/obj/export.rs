@@ -8,9 +8,9 @@ impl ObjParseResult
     {
         let mut writer = std::io::BufWriter::new(std::fs::File::create(file_path)?);
 
-        for vertex_pos in self.positions.iter()
+        for i in (0..self.positions.len()).step_by(3)
         {
-            writer.write_fmt(format_args!("v {} {} {}\n", vertex_pos.0, vertex_pos.1, vertex_pos.2))?;
+            writer.write_fmt(format_args!("v {} {} {}\n", self.positions[i], self.positions[i + 1], self.positions[i + 2]))?;
         }
 
         let has_texcoords = self.texcoords.is_some();
@@ -18,25 +18,25 @@ impl ObjParseResult
 
         if let Some(texcoords) = &self.texcoords
         {
-            for texcoords in texcoords.iter()
+            for i in (0..texcoords.len()).step_by(2)
             {
-                writer.write_fmt(format_args!("vt {} {}\n", texcoords.0, texcoords.1))?;
+                writer.write_fmt(format_args!("vt {} {}\n", texcoords[i], texcoords[i + 1]))?;
             }
         }
 
         if let Some(normals) = &self.normals
         {
-            for normals in normals.iter()
+            for i in (0..normals.len()).step_by(3)
             {
-                writer.write_fmt(format_args!("vn {} {} {}\n", normals.0, normals.1, normals.2))?;
+                writer.write_fmt(format_args!("vn {} {} {}\n", normals[i], normals[i + 1], normals[i + 2]))?;
             }
         }
 
         for i in (0..self.indices.len()).step_by(3)
         {
             let idx0 = self.indices[i] + 1;
-            let idx1 = self.indices[i + 2] + 1;
-            let idx2 = self.indices[i + 1] + 1;
+            let idx1 = self.indices[i + 1] + 1;
+            let idx2 = self.indices[i + 2] + 1;
             match (has_texcoords, has_normals)
             {
                 (false, false) =>
