@@ -2,9 +2,6 @@
 extern crate bitflags;
 extern crate lexical;
 
-use std::fs::File;
-use std::io::{self, BufRead};
-
 fn format_parse_error<T>(bytes: &[u8]) -> String
 {
     format!("Parse error: {}",
@@ -210,7 +207,7 @@ where
         }
     }
 
-    line_face_type.ok_or("Unknown face type".into())
+    line_face_type.ok_or_else(|| "Unknown face type".into())
 }
 
 bitflags!
@@ -233,14 +230,6 @@ bitflags!
             Self::LOAD_MATERIALS.bits;
 
     }
-}
-
-enum LineType
-{
-    Vertex,
-    Face,
-    VertexTexcoord,
-    VertexNormal,
 }
 
 pub struct ObjParseResult
@@ -281,25 +270,12 @@ pub fn load_obj(file_path: &str, parse_features: ObjParseFeatures) -> Result<Obj
     let mut temp_face_vertices_absolute = Vec::<ObjVertexAbsolute>::with_capacity(16);
     let mut temp_face_data = Vec::<u32>::with_capacity(16);
 
-    let mut lines = Vec::<LineType>::with_capacity(10);
-    lines.push(LineType::Vertex);
-    lines.push(LineType::Face);
-
-    if load_vertex_texcoords
-    {
-        lines.push(LineType::VertexTexcoord);
-    }
-
-    if load_vertex_normals
-    {
-        lines.push(LineType::VertexNormal);
-    }
-
     let mut file_face_type = None;
+    let file_bytes = std::fs::read(file_path)?;
 
-    for line in io::BufReader::new(File::open(file_path)?).lines().flatten()
+    for line in file_bytes.split(|ch| *ch == b'\n' || *ch == b'\r')
     {
-        let line = line.as_bytes();
+        // let line = line.as_bytes();
         let mut split_iter = line.split(|ch| ch.is_ascii_whitespace()).filter(|segment| !segment.is_empty());
         if let Some(cmd) = split_iter.next()
         {
@@ -355,7 +331,7 @@ pub fn load_obj(file_path: &str, parse_features: ObjParseFeatures) -> Result<Obj
 
                     let mut try_add_vertex_position = |vertex_absolute: &ObjVertexAbsolute| -> Result<(), Box<dyn std::error::Error>>
                     {
-                        result_positions.push(*vertices.get((&vertex_absolute).position_index as usize).ok_or("Vertex position index is out of bounds")?);
+                        result_positions.push(*vertices.get((&vertex_absolute).position_index as usize).ok_or_else(|| "Vertex position index is out of bounds")?);
                         Ok(())
                     };
 
@@ -365,7 +341,7 @@ pub fn load_obj(file_path: &str, parse_features: ObjParseFeatures) -> Result<Obj
                         {
                             if let Some(texcoord_index) = (&vertex_absolute).texcoord_index
                             {
-                                result_texcoords.push(*texcoords.get(texcoord_index as usize).ok_or("Vertex texcoord index is out of bounds")?);
+                                result_texcoords.push(*texcoords.get(texcoord_index as usize).ok_or_else(|| "Vertex texcoord index is out of bounds")?);
                             }
                         }
 
@@ -378,7 +354,7 @@ pub fn load_obj(file_path: &str, parse_features: ObjParseFeatures) -> Result<Obj
                         {
                             if let Some(normal_index) = (&vertex_absolute).normal_index
                             {
-                                result_normals.push(*normals.get(normal_index as usize).ok_or("Vertex normal index is out of bounds")?);
+                                result_normals.push(*normals.get(normal_index as usize).ok_or_else(|| "Vertex normal index is out of bounds")?);
                             }
                         }
 

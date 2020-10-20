@@ -29,7 +29,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>>
     
         println!("loading model: {}", file_path_str);
         let result = match objparser::obj::obj::load_obj(file_path_str,
-            objparser::obj::obj::ObjParseFeatures::LOAD_VERTEX_NORMALS)
+            objparser::obj::obj::ObjParseFeatures::NONE)
         {
             Ok(res) => res,
             Err(err) =>
