@@ -11,13 +11,22 @@ public class ObjParserTest : MonoBehaviour
     public unsafe static class ExternalDll
     {
         /// <summary>
-        /// Parses an obj file
+        /// Parses an obj file from file path
         /// </summary>
         /// <param name="filePathBytes">UTF-8 bytes of the path</param>
         /// <param name="filePathByteCount">The byte count of filePathBytes</param>
         /// <returns>A pointer to the handle. If null, then an error occured while parsing.</returns>
+        [DllImport("objparsers.dll", EntryPoint = "parse_obj_from_file_path", CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Auto)]
+        public static extern void* ParseObjFromFilePath(byte* filePathBytes, uint filePathByteCount);
+
+        /// <summary>
+        /// Parses an obj file from bytes
+        /// </summary>
+        /// <param name="fileContentsBytes">Bytes of the file's content</param>
+        /// <param name="fileContentsByteCount">The byte count of fileContentsBytes</param>
+        /// <returns>A pointer to the handle. If null, then an error occured while parsing.</returns>
         [DllImport("objparsers.dll", EntryPoint = "parse_obj", CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Auto)]
-        public static extern void* ParseObj(byte* filePathBytes, uint filePathByteCount);
+        public static extern void* ParseObj(byte* fileContentsBytes, uint fileContentsByteCount);
 
         /// <summary>
         /// Note: the count is the count of the vertices, which is equal to array size / 3

@@ -8,9 +8,27 @@ pub struct ObjParserHandle
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn parse_obj(file_path_utf8_bytes: *const u8, file_path_byte_count: u32) -> *const ObjParserHandle
+pub unsafe extern "C" fn parse_obj_from_file_path(file_path_utf8_bytes: *const u8, file_path_byte_count: u32) -> *const ObjParserHandle
 {
-    match std::panic::catch_unwind(|| parse_obj_internal(file_path_utf8_bytes, file_path_byte_count))
+    match std::panic::catch_unwind(|| parse_obj_from_file_path_internal(file_path_utf8_bytes, file_path_byte_count))
+    {
+        Ok(parse_result) =>
+        {
+            match parse_result
+            {
+                Ok(handle) => Box::into_raw(Box::new(handle)),
+                Err(_) => std::ptr::null()
+            }
+        },
+        Err(_) => std::ptr::null() // panic occured
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn parse_obj(file_content_bytes: *const u8, file_content_byte_count: u32) -> *const ObjParserHandle
+{
+    let bytes = std::slice::from_raw_parts(file_content_bytes, file_content_byte_count as usize);
+    match std::panic::catch_unwind(|| parse_obj_from_bytes_internal(bytes))
     {
         Ok(parse_result) =>
         {
@@ -74,12 +92,19 @@ pub unsafe extern "C" fn destroy_handle(handle: *mut ObjParserHandle)
 }
 
 
-unsafe fn parse_obj_internal(file_path_utf8_bytes: *const u8, file_path_byte_count: u32) -> Result<ObjParserHandle, Box<dyn std::error::Error>>
+unsafe fn parse_obj_from_file_path_internal(file_path_utf8_bytes: *const u8, file_path_byte_count: u32) -> Result<ObjParserHandle, Box<dyn std::error::Error>>
 {
     let file_path_bytes = std::slice::from_raw_parts(file_path_utf8_bytes, file_path_byte_count as usize);
     let file_path = std::str::from_utf8(file_path_bytes)?;
 
     let result = objparser::obj::obj::load_obj(file_path, objparser::obj::obj::ObjParseFeatures::NONE)?;
+
+    Ok(ObjParserHandle { result })
+}
+
+unsafe fn parse_obj_from_bytes_internal(bytes: &[u8]) -> Result<ObjParserHandle, Box<dyn std::error::Error>>
+{
+    let result = objparser::obj::obj::load_obj_from_bytes(bytes, objparser::obj::obj::ObjParseFeatures::NONE)?;
 
     Ok(ObjParserHandle { result })
 }

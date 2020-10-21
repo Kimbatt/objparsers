@@ -242,6 +242,12 @@ pub struct ObjParseResult
 
 pub fn load_obj(file_path: &str, parse_features: ObjParseFeatures) -> Result<ObjParseResult, Box<dyn std::error::Error>>
 {
+    let file_bytes = std::fs::read(file_path)?;
+    load_obj_from_bytes(file_bytes.as_slice(), parse_features)
+}
+
+pub fn load_obj_from_bytes(file_bytes: &[u8], parse_features: ObjParseFeatures) -> Result<ObjParseResult, Box<dyn std::error::Error>>
+{
     let load_vertex_normals = (parse_features & ObjParseFeatures::LOAD_VERTEX_NORMALS) != ObjParseFeatures::NONE;
     let load_vertex_texcoords = (parse_features & ObjParseFeatures::LOAD_VERTEX_TEXCOORDS) != ObjParseFeatures::NONE;
     let load_objects = (parse_features & ObjParseFeatures::LOAD_OBJECTS) != ObjParseFeatures::NONE;
@@ -271,7 +277,6 @@ pub fn load_obj(file_path: &str, parse_features: ObjParseFeatures) -> Result<Obj
     let mut temp_face_data = Vec::<u32>::with_capacity(16);
 
     let mut file_face_type = None;
-    let file_bytes = std::fs::read(file_path)?;
 
     for line in file_bytes.split(|ch| *ch == b'\n' || *ch == b'\r')
     {
