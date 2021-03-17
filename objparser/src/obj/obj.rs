@@ -18,12 +18,12 @@ fn format_parse_error<T>(bytes: &[u8]) -> String
     })
 }
 
-fn try_parse_lossy<T: lexical::FromLexicalLossy>(bytes: &[u8]) -> Result<T, Box<dyn std::error::Error>>
+fn try_parse_f32(bytes: &[u8]) -> Result<f32, Box<dyn std::error::Error>>
 {
-    match lexical::parse_lossy::<T, _>(bytes)
+    match fast_float::parse::<f32, _>(bytes)
     {
         Ok(val) => Ok(val),
-        Err(_) => Err(format_parse_error::<T>(bytes).into())
+        Err(_) => Err(format_parse_error::<f32>(bytes).into())
     }
 }
 
@@ -45,7 +45,7 @@ where
 
     for segment in params_iter
     {
-        vertex[count] = try_parse_lossy::<f32>(segment)?;
+        vertex[count] = try_parse_f32(segment)?;
         count += 1;
         if count == 3
         {
@@ -72,7 +72,7 @@ where
 
     for segment in params_iter
     {
-        vertex[count] = try_parse_lossy::<f32>(segment)?;
+        vertex[count] = try_parse_f32(segment)?;
         count += 1;
         if count == 2
         {
@@ -255,10 +255,6 @@ pub fn load_obj_from_bytes(file_bytes: &[u8], parse_features: ObjParseFeatures) 
     let load_materials = (parse_features & ObjParseFeatures::LOAD_MATERIALS) != ObjParseFeatures::NONE;
 
     let load_vertex_pos_only = parse_features == ObjParseFeatures::NONE;
-    let use_separate_vertices_for_each_face =
-        (parse_features & ObjParseFeatures::LOAD_OBJECTS) != ObjParseFeatures::NONE ||
-        (parse_features & ObjParseFeatures::LOAD_GROUPS) != ObjParseFeatures::NONE ||
-        (parse_features & ObjParseFeatures::LOAD_MATERIALS) != ObjParseFeatures::NONE;
 
     let mut vertices = Vec::<f32>::with_capacity(128);
     let mut texcoords = Vec::<f32>::with_capacity(128);
@@ -268,6 +264,10 @@ pub fn load_obj_from_bytes(file_bytes: &[u8], parse_features: ObjParseFeatures) 
     let mut result_texcoords = Vec::<f32>::with_capacity(128);
     let mut result_normals = Vec::<f32>::with_capacity(128);
     let mut result_indices = Vec::<u32>::with_capacity(128);
+
+    let mut position_count = 0_usize;
+    let mut texcoord_count = 0_usize;
+    let mut normal_count = 0_usize;
 
     let mut vertex_index_map = std::collections::hash_map::HashMap::<ObjVertexAbsolute, u32>::with_capacity(128);
     let mut vertex_count = 0;
@@ -291,19 +291,30 @@ pub fn load_obj_from_bytes(file_bytes: &[u8], parse_features: ObjParseFeatures) 
                     vertices.push(vertex.0);
                     vertices.push(vertex.1);
                     vertices.push(vertex.2);
+                    position_count += 1;
                 },
-                b"vt" if load_vertex_texcoords =>
+                b"vt" =>
                 {
-                    let texcoord = read_vertex_texcoord(&mut split_iter)?;
-                    texcoords.push(texcoord.0);
-                    texcoords.push(texcoord.1);
+                    if load_vertex_texcoords
+                    {
+                        let texcoord = read_vertex_texcoord(&mut split_iter)?;
+                        texcoords.push(texcoord.0);
+                        texcoords.push(texcoord.1);
+                    }
+
+                    texcoord_count += 1;
                 },
-                b"vn" if load_vertex_normals =>
+                b"vn" =>
                 {
-                    let normal = read_vertex(&mut split_iter)?;
-                    normals.push(normal.0);
-                    normals.push(normal.1);
-                    normals.push(normal.2);
+                    if load_vertex_normals
+                    {
+                        let normal = read_vertex(&mut split_iter)?;
+                        normals.push(normal.0);
+                        normals.push(normal.1);
+                        normals.push(normal.2);
+                    }
+
+                    normal_count += 1;
                 },
                 b"f" =>
                 {
@@ -326,19 +337,39 @@ pub fn load_obj_from_bytes(file_bytes: &[u8], parse_features: ObjParseFeatures) 
                     };
 
                     // if the index is negative, then it refers to relative vertices (-1 refers to the currently last vertex in the list, -2 to the second last, etc.)
-                    let map_position_index = |index: i32| -> u32
+                    let validate_index = |index: i32, current_count: &usize| -> Result<u32, Box<dyn std::error::Error>>
                     {
-                        (if index < 0 { vertices.len() as i32 + index } else { index - 1 }) as u32
+                        if index <= 0
+                        {
+                            let absolute_index = *current_count as i32 + index;
+                            if absolute_index < 0
+                            {
+                                Err(format!("Relative index {} is out of bounds", index).into())
+                            }
+                            else
+                            {
+                                Ok(absolute_index as u32)
+                            }
+                        }
+                        else
+                        {
+                            Ok((index - 1) as u32)
+                        }
                     };
 
-                    let map_texcoord_index = |index: i32| -> u32
+                    let map_position_index = |index: i32| -> Result<u32, Box<dyn std::error::Error>>
                     {
-                        (if index < 0 { texcoords.len() as i32 + index } else { index - 1 }) as u32
+                        validate_index(index, &position_count)
                     };
 
-                    let map_normal_index = |index: i32| -> u32
+                    let map_texcoord_index = |index: i32| -> Result<u32, Box<dyn std::error::Error>>
                     {
-                        (if index < 0 { normals.len() as i32 + index } else { index - 1 }) as u32
+                        validate_index(index, &texcoord_count)
+                    };
+
+                    let map_normal_index = |index: i32| -> Result<u32, Box<dyn std::error::Error>>
+                    {
+                        validate_index(index, &normal_count)
                     };
 
                     let mut try_add_vertex_position = |vertex_absolute: &ObjVertexAbsolute| -> Result<(), Box<dyn std::error::Error>>
@@ -378,87 +409,91 @@ pub fn load_obj_from_bytes(file_bytes: &[u8], parse_features: ObjParseFeatures) 
                     {
                         let vertex_absolute = ObjVertexAbsolute
                         {
-                            position_index: map_position_index(vertex.position_index),
-                            texcoord_index: if let Some(idx) = vertex.texcoord_index { Some(map_texcoord_index(idx)) } else { None },
-                            normal_index: if let Some(idx) = vertex.normal_index { Some(map_normal_index(idx)) } else { None },
+                            position_index: map_position_index(vertex.position_index)?,
+                            texcoord_index: if let Some(idx) = vertex.texcoord_index { Some(map_texcoord_index(idx)?) } else { None },
+                            normal_index: if let Some(idx) = vertex.normal_index { Some(map_normal_index(idx)?) } else { None },
                         };
+
+                        if vertex_absolute.position_index as usize >= position_count
+                        {
+                            return Err(format!("Vertex position index {} is referenced, but the largest possible index is {}",
+                                vertex_absolute.position_index, position_count - 1).into());
+                        }
+
+                        if load_vertex_texcoords
+                        {
+                            if let Some(texcoord_index) = vertex_absolute.texcoord_index
+                            {
+                                if texcoord_index as usize >= texcoord_count
+                                {
+                                    return Err(format!("Vertex texcoord index {} is referenced, but the largest possible index is {}",
+                                        texcoord_index, texcoord_count - 1).into());
+                                }
+                            }
+                        }
+
+                        if load_vertex_normals
+                        {
+                            if let Some(normal_index) = vertex_absolute.normal_index
+                            {
+                                if normal_index as usize >= normal_count
+                                {
+                                    return Err(format!("Vertex normal index {} is referenced, but the largest possible index is {}",
+                                        normal_index, normal_count - 1).into());
+                                }
+                            }
+                        }
 
                         temp_face_vertices_absolute.push(vertex_absolute);
                     }
 
-                    if use_separate_vertices_for_each_face
+                    temp_face_data.clear();
+                    for vertex_absolute in temp_face_vertices_absolute.iter()
                     {
-                        let mut add_vertex = |vertex: &ObjVertexAbsolute| -> Result<(), Box<dyn std::error::Error>>
+                        let vertex_index = if load_vertex_pos_only
                         {
-                            result_indices.push(vertex_count);
-                            try_add_vertex_position(vertex)?;
-                            try_add_vertex_texcoord(vertex)?;
-                            try_add_vertex_normal(vertex)?;
-                            vertex_count += 1;
-                            Ok(())
+                            vertex_absolute.position_index
+                        }
+                        else
+                        {
+                            match vertex_index_map.entry(*vertex_absolute)
+                            {
+                                std::collections::hash_map::Entry::Occupied(entry) =>
+                                {
+                                    *entry.get()
+                                },
+                                std::collections::hash_map::Entry::Vacant(entry) =>
+                                {
+                                    let idx = vertex_count;
+
+                                    try_add_vertex_position(&vertex_absolute)?;
+                                    try_add_vertex_texcoord(&vertex_absolute)?;
+                                    try_add_vertex_normal(&vertex_absolute)?;
+
+                                    vertex_count += 1;
+                                    entry.insert(idx);
+                                    idx
+                                }
+                            }
                         };
 
-                        let vertex0 = &temp_face_vertices_absolute[0];
-                        for i in 2..temp_face_vertices_absolute.len()
-                        {
-                            let vertex1 = &temp_face_vertices_absolute[i - 1];
-                            let vertex2 = &temp_face_vertices_absolute[i];
-
-                            add_vertex(vertex0)?;
-                            add_vertex(vertex2)?;
-                            add_vertex(vertex1)?;
-                        }
+                        temp_face_data.push(vertex_index);
                     }
-                    else
+
+                    if temp_face_data.len() < 3
                     {
-                        temp_face_data.clear();
-                        for vertex_absolute in temp_face_vertices_absolute.iter()
-                        {
-                            let vertex_index = if load_vertex_pos_only
-                            {
-                                vertex_absolute.position_index
-                            }
-                            else
-                            {
-                                match vertex_index_map.entry(*vertex_absolute)
-                                {
-                                    std::collections::hash_map::Entry::Occupied(entry) =>
-                                    {
-                                        *entry.get()
-                                    },
-                                    std::collections::hash_map::Entry::Vacant(entry) =>
-                                    {
-                                        let idx = vertex_count;
+                        return Err("At least 3 vertex indices are required".into());
+                    }
 
-                                        try_add_vertex_position(&vertex_absolute)?;
-                                        try_add_vertex_texcoord(&vertex_absolute)?;
-                                        try_add_vertex_normal(&vertex_absolute)?;
+                    let idx0 = temp_face_data[0];
+                    for i in 2..temp_face_data.len()
+                    {
+                        let idx1 = temp_face_data[i - 1];
+                        let idx2 = temp_face_data[i];
 
-                                        vertex_count += 1;
-                                        entry.insert(idx);
-                                        idx
-                                    }
-                                }
-                            };
-
-                            temp_face_data.push(vertex_index);
-                        }
-
-                        if temp_face_data.len() < 3
-                        {
-                            return Err("At least 3 vertex indices are required".into());
-                        }
-
-                        let idx0 = temp_face_data[0];
-                        for i in 2..temp_face_data.len()
-                        {
-                            let idx1 = temp_face_data[i - 1];
-                            let idx2 = temp_face_data[i];
-
-                            result_indices.push(idx0);
-                            result_indices.push(idx1);
-                            result_indices.push(idx2);
-                        }
+                        result_indices.push(idx0);
+                        result_indices.push(idx1);
+                        result_indices.push(idx2);
                     }
                 },
                 b"o" if load_objects =>
@@ -478,7 +513,7 @@ pub fn load_obj_from_bytes(file_bytes: &[u8], parse_features: ObjParseFeatures) 
         }
     }
 
-    if load_vertex_pos_only && !use_separate_vertices_for_each_face
+    if load_vertex_pos_only
     {
         result_positions = vertices;
     }

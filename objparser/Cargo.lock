@@ -19,6 +19,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4785bdd1c96b2a846b2bd7cc02e86b6b3dbf14e7e53446c4f54c92a361040822"
 
 [[package]]
+name = "fast-float"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "95765f67b4b18863968b4a1bd5bb576f732b29a4a28c7cd84c09fa3e2875f33c"
+
+[[package]]
 name = "lexical"
 version = "5.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -46,6 +52,7 @@ name = "objparser"
 version = "0.1.0"
 dependencies = [
  "bitflags",
+ "fast-float",
  "lexical",
 ]
 
