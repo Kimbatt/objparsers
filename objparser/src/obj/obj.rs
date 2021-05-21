@@ -98,11 +98,11 @@ struct ObjVertexRelative
 }
 
 #[derive(Copy, Clone)]
-struct ObjVertexAbsolute
+pub struct ObjVertexAbsolute
 {
-    position_index: u32,
-    texcoord_index: Option<u32>,
-    normal_index: Option<u32>
+    pub position_index: u32,
+    pub texcoord_index: Option<u32>,
+    pub normal_index: Option<u32>
 }
 
 impl std::hash::Hash for ObjVertexAbsolute
@@ -234,16 +234,56 @@ bitflags!
 
 pub struct ObjParseResult
 {
-    pub positions: Vec<f32>,
-    pub texcoords: Option<Vec<f32>>,
-    pub normals: Option<Vec<f32>>,
-    pub indices: Vec<u32>
+    pub objects: Vec<ObjObject>,
+    pub vertex_buffer: Vec<Vec3>,
+    pub texcoord_buffer: Option<Vec<Vec2>>,
+    pub normal_buffer: Option<Vec<Vec3>>
 }
 
 pub fn load_obj(file_path: &str, parse_features: ObjParseFeatures) -> Result<ObjParseResult, Box<dyn std::error::Error>>
 {
     let file_bytes = std::fs::read(file_path)?;
     load_obj_from_bytes(file_bytes.as_slice(), parse_features)
+}
+
+#[repr(C)]
+pub struct Vector2<T>
+{
+    pub x: T,
+    pub y: T
+}
+
+#[repr(C)]
+pub struct Vector3<T>
+{
+    pub x: T,
+    pub y: T,
+    pub z: T
+}
+
+impl<T> Vector2<T>
+{
+    fn new(x: T, y: T) -> Self
+    {
+        Self { x, y }
+    }
+}
+
+impl<T> Vector3<T>
+{
+    fn new(x: T, y: T, z: T) -> Self
+    {
+        Self { x, y, z }
+    }
+}
+
+type Vec2 = Vector2<f32>;
+type Vec3 = Vector3<f32>;
+
+pub struct ObjObject
+{
+    pub name: Vec<u8>,
+    pub indices: Vec<Vector3<ObjVertexAbsolute>>
 }
 
 pub fn load_obj_from_bytes(file_bytes: &[u8], parse_features: ObjParseFeatures) -> Result<ObjParseResult, Box<dyn std::error::Error>>
@@ -254,27 +294,21 @@ pub fn load_obj_from_bytes(file_bytes: &[u8], parse_features: ObjParseFeatures) 
     let load_groups = load_objects && (parse_features & ObjParseFeatures::LOAD_GROUPS) != ObjParseFeatures::NONE;
     let load_materials = (parse_features & ObjParseFeatures::LOAD_MATERIALS) != ObjParseFeatures::NONE;
 
-    let load_vertex_pos_only = parse_features == ObjParseFeatures::NONE;
+    let mut all_objects = Vec::<ObjObject>::new();
+    all_objects.push(ObjObject
+    {
+        name: vec![],
+        indices: vec![]
+    });
 
-    let mut vertices = Vec::<f32>::with_capacity(128);
-    let mut texcoords = Vec::<f32>::with_capacity(128);
-    let mut normals = Vec::<f32>::with_capacity(128);
+    let mut current_object = &mut all_objects[0];
 
-    let mut result_positions = Vec::<f32>::with_capacity(128);
-    let mut result_texcoords = Vec::<f32>::with_capacity(128);
-    let mut result_normals = Vec::<f32>::with_capacity(128);
-    let mut result_indices = Vec::<u32>::with_capacity(128);
-
-    let mut position_count = 0_usize;
-    let mut texcoord_count = 0_usize;
-    let mut normal_count = 0_usize;
-
-    let mut vertex_index_map = std::collections::hash_map::HashMap::<ObjVertexAbsolute, u32>::with_capacity(128);
-    let mut vertex_count = 0;
+    let mut vertices = Vec::<Vec3>::with_capacity(128);
+    let mut texcoords = Vec::<Vec2>::with_capacity(if load_vertex_texcoords { 128 } else { 0 });
+    let mut normals = Vec::<Vec3>::with_capacity(if load_vertex_normals { 128 } else { 0 });
 
     let mut temp_face_vertices = Vec::<ObjVertexRelative>::with_capacity(16);
     let mut temp_face_vertices_absolute = Vec::<ObjVertexAbsolute>::with_capacity(16);
-    let mut temp_face_data = Vec::<u32>::with_capacity(16);
 
     let mut file_face_type = None;
 
@@ -288,33 +322,23 @@ pub fn load_obj_from_bytes(file_bytes: &[u8], parse_features: ObjParseFeatures) 
                 b"v" =>
                 {
                     let vertex = read_vertex(&mut split_iter)?;
-                    vertices.push(vertex.0);
-                    vertices.push(vertex.1);
-                    vertices.push(vertex.2);
-                    position_count += 1;
+                    vertices.push(Vec3::new(vertex.0, vertex.1, vertex.2));
                 },
                 b"vt" =>
                 {
                     if load_vertex_texcoords
                     {
                         let texcoord = read_vertex_texcoord(&mut split_iter)?;
-                        texcoords.push(texcoord.0);
-                        texcoords.push(texcoord.1);
+                        texcoords.push(Vec2::new(texcoord.0, texcoord.1));
                     }
-
-                    texcoord_count += 1;
                 },
                 b"vn" =>
                 {
                     if load_vertex_normals
                     {
                         let normal = read_vertex(&mut split_iter)?;
-                        normals.push(normal.0);
-                        normals.push(normal.1);
-                        normals.push(normal.2);
+                        normals.push(Vec3::new(normal.0, normal.1, normal.2));
                     }
-
-                    normal_count += 1;
                 },
                 b"f" =>
                 {
@@ -337,11 +361,11 @@ pub fn load_obj_from_bytes(file_bytes: &[u8], parse_features: ObjParseFeatures) 
                     };
 
                     // if the index is negative, then it refers to relative vertices (-1 refers to the currently last vertex in the list, -2 to the second last, etc.)
-                    let validate_index = |index: i32, current_count: &usize| -> Result<u32, Box<dyn std::error::Error>>
+                    let validate_index = |index: i32, current_count: u32| -> Result<u32, Box<dyn std::error::Error>>
                     {
                         if index <= 0
                         {
-                            let absolute_index = *current_count as i32 + index;
+                            let absolute_index = current_count as i32 + index;
                             if absolute_index < 0
                             {
                                 Err(format!("Relative index {} is out of bounds", index).into())
@@ -359,49 +383,17 @@ pub fn load_obj_from_bytes(file_bytes: &[u8], parse_features: ObjParseFeatures) 
 
                     let map_position_index = |index: i32| -> Result<u32, Box<dyn std::error::Error>>
                     {
-                        validate_index(index, &position_count)
+                        validate_index(index, vertices.len() as u32)
                     };
 
                     let map_texcoord_index = |index: i32| -> Result<u32, Box<dyn std::error::Error>>
                     {
-                        validate_index(index, &texcoord_count)
+                        validate_index(index, texcoords.len() as u32)
                     };
 
                     let map_normal_index = |index: i32| -> Result<u32, Box<dyn std::error::Error>>
                     {
-                        validate_index(index, &normal_count)
-                    };
-
-                    let mut try_add_vertex_position = |vertex_absolute: &ObjVertexAbsolute| -> Result<(), Box<dyn std::error::Error>>
-                    {
-                        result_positions.push(*vertices.get((&vertex_absolute).position_index as usize).ok_or_else(|| "Vertex position index is out of bounds")?);
-                        Ok(())
-                    };
-
-                    let mut try_add_vertex_texcoord = |vertex_absolute: &ObjVertexAbsolute| -> Result<(), Box<dyn std::error::Error>>
-                    {
-                        if load_vertex_texcoords
-                        {
-                            if let Some(texcoord_index) = (&vertex_absolute).texcoord_index
-                            {
-                                result_texcoords.push(*texcoords.get(texcoord_index as usize).ok_or_else(|| "Vertex texcoord index is out of bounds")?);
-                            }
-                        }
-
-                        Ok(())
-                    };
-
-                    let mut try_add_vertex_normal = |vertex_absolute: &ObjVertexAbsolute| -> Result<(), Box<dyn std::error::Error>>
-                    {
-                        if load_vertex_normals
-                        {
-                            if let Some(normal_index) = (&vertex_absolute).normal_index
-                            {
-                                result_normals.push(*normals.get(normal_index as usize).ok_or_else(|| "Vertex normal index is out of bounds")?);
-                            }
-                        }
-
-                        Ok(())
+                        validate_index(index, normals.len() as u32)
                     };
 
                     temp_face_vertices_absolute.clear();
@@ -414,20 +406,20 @@ pub fn load_obj_from_bytes(file_bytes: &[u8], parse_features: ObjParseFeatures) 
                             normal_index: if let Some(idx) = vertex.normal_index { Some(map_normal_index(idx)?) } else { None },
                         };
 
-                        if vertex_absolute.position_index as usize >= position_count
+                        if vertex_absolute.position_index as usize >= vertices.len()
                         {
                             return Err(format!("Vertex position index {} is referenced, but the largest possible index is {}",
-                                vertex_absolute.position_index, position_count - 1).into());
+                                vertex_absolute.position_index, vertices.len() - 1).into());
                         }
 
                         if load_vertex_texcoords
                         {
                             if let Some(texcoord_index) = vertex_absolute.texcoord_index
                             {
-                                if texcoord_index as usize >= texcoord_count
+                                if texcoord_index as usize >= texcoords.len()
                                 {
                                     return Err(format!("Vertex texcoord index {} is referenced, but the largest possible index is {}",
-                                        texcoord_index, texcoord_count - 1).into());
+                                        texcoord_index, texcoords.len() - 1).into());
                                 }
                             }
                         }
@@ -436,10 +428,10 @@ pub fn load_obj_from_bytes(file_bytes: &[u8], parse_features: ObjParseFeatures) 
                         {
                             if let Some(normal_index) = vertex_absolute.normal_index
                             {
-                                if normal_index as usize >= normal_count
+                                if normal_index as usize >= normals.len()
                                 {
                                     return Err(format!("Vertex normal index {} is referenced, but the largest possible index is {}",
-                                        normal_index, normal_count - 1).into());
+                                        normal_index, normals.len() - 1).into());
                                 }
                             }
                         }
@@ -447,58 +439,57 @@ pub fn load_obj_from_bytes(file_bytes: &[u8], parse_features: ObjParseFeatures) 
                         temp_face_vertices_absolute.push(vertex_absolute);
                     }
 
-                    temp_face_data.clear();
-                    for vertex_absolute in temp_face_vertices_absolute.iter()
-                    {
-                        let vertex_index = if load_vertex_pos_only
-                        {
-                            vertex_absolute.position_index
-                        }
-                        else
-                        {
-                            match vertex_index_map.entry(*vertex_absolute)
-                            {
-                                std::collections::hash_map::Entry::Occupied(entry) =>
-                                {
-                                    *entry.get()
-                                },
-                                std::collections::hash_map::Entry::Vacant(entry) =>
-                                {
-                                    let idx = vertex_count;
-
-                                    try_add_vertex_position(&vertex_absolute)?;
-                                    try_add_vertex_texcoord(&vertex_absolute)?;
-                                    try_add_vertex_normal(&vertex_absolute)?;
-
-                                    vertex_count += 1;
-                                    entry.insert(idx);
-                                    idx
-                                }
-                            }
-                        };
-
-                        temp_face_data.push(vertex_index);
-                    }
-
-                    if temp_face_data.len() < 3
+                    if temp_face_vertices_absolute.len() < 3
                     {
                         return Err("At least 3 vertex indices are required".into());
                     }
 
-                    let idx0 = temp_face_data[0];
-                    for i in 2..temp_face_data.len()
+                    let idx0 = temp_face_vertices_absolute[0];
+                    for i in 2..temp_face_vertices_absolute.len()
                     {
-                        let idx1 = temp_face_data[i - 1];
-                        let idx2 = temp_face_data[i];
+                        let idx1 = temp_face_vertices_absolute[i - 1];
+                        let idx2 = temp_face_vertices_absolute[i];
 
-                        result_indices.push(idx0);
-                        result_indices.push(idx1);
-                        result_indices.push(idx2);
+                        current_object.indices.push(Vector3::new(idx0, idx1, idx2));
                     }
                 },
                 b"o" if load_objects =>
                 {
-                    // TODO
+                    let start_index = if let Some(pos) = line[1..].iter().position(|ch| !ch.is_ascii_whitespace())
+                    {
+                        pos + 1
+                    }
+                    else
+                    {
+                        1
+                    };
+
+                    let object_name = &line[start_index..];
+
+                    let current_object_index =
+                    {
+                        let index = all_objects.iter().enumerate()
+                            .find(|(_idx, object)| object.name == object_name)
+                            .map(|res| res.0);
+
+                        if let Some(idx) = index
+                        {
+                            idx
+                        }
+                        else
+                        {
+                            let idx = all_objects.len();
+                            all_objects.push(ObjObject
+                            {
+                                name: object_name.to_owned(),
+                                indices: vec![]
+                            });
+
+                            idx
+                        }
+                    };
+
+                    current_object = &mut all_objects[current_object_index];
                 },
                 b"g" if load_groups =>
                 {
@@ -513,16 +504,16 @@ pub fn load_obj_from_bytes(file_bytes: &[u8], parse_features: ObjParseFeatures) 
         }
     }
 
-    if load_vertex_pos_only
+    if all_objects[0].indices.is_empty()
     {
-        result_positions = vertices;
+        // remove default object if empty
+        all_objects.remove(0);
     }
 
-    Ok(ObjParseResult
-    {
-        positions: result_positions,
-        texcoords: if load_vertex_texcoords && !result_texcoords.is_empty() { Some(result_texcoords) } else { None },
-        normals: if load_vertex_normals && !result_normals.is_empty() { Some(result_normals) } else { None },
-        indices: result_indices
+    Ok(ObjParseResult {
+        objects: all_objects,
+        vertex_buffer: vertices,
+        texcoord_buffer: if load_vertex_texcoords && !texcoords.is_empty() { Some(texcoords) } else { None },
+        normal_buffer: if load_vertex_normals && !normals.is_empty() { Some(normals) } else { None }
     })
 }
